@@ -93,10 +93,8 @@ struct thr_tx {
     Tunnel		*tunnel;
 };
 
-struct gre_hdr {
+struct eoip_hdr {
     uint32_t		header;
-    uint16_t		payload_size;
-    uint16_t		tunnel_id;
 } __attribute__ ((__packed__));
 
 int numtunnels;
@@ -167,7 +165,7 @@ static void *thr_rx(void *threadid)
     unsigned char *rxringbufptr[MAXRINGBUF];
     unsigned char *rxringbuffer;
     unsigned char *ptr;
-    struct gre_hdr *ghdr;
+    struct eoip_hdr *ghdr;
     int i, ret, rxringbufused = 0, rxringbufconsumed, rxringpayload[MAXRINGBUF];
     int saddr_size = sizeof(saddr[0]);
     int raw_socket = thr_rx_data->raw_socket;
@@ -218,13 +216,13 @@ static void *thr_rx(void *threadid)
 	    rxringbufconsumed = 0;
 	    do {
 		ptr = rxringbufptr[rxringbufconsumed];
-		ghdr = (struct gre_hdr*)(ptr+20);
+		ghdr = (struct eoip_hdr*)(ptr+20);
 		ret = 0;
 		/* TODO: Optimize search of tunnel id */
-		for(i=0; i<numtunnels; i++)
-		{
+                for(i=0; i<numtunnels; i++)
+                {
 		    tunnel=tunnels + i;
-		    if ((uint16_t)(__le16_to_cpu(ghdr->tunnel_id)) == (uint16_t) tunnel->id)
+		    if (1) // HACK: Use first tunnel first
 		    {
 			/* This is a dynamic tunnel */
 			if (tunnel->dynamic) {
@@ -235,7 +233,7 @@ static void *thr_rx(void *threadid)
 				pthread_mutex_unlock(&mutex1);
 			    }
 			}
-			ret = write(tunnel->fd, ptr+28, rxringpayload[rxringbufconsumed] - 28);
+			ret = write(tunnel->fd, ptr+22, rxringpayload[rxringbufconsumed] - 22);
 		        break;
 		    }
 		}
@@ -257,9 +255,9 @@ static void *thr_tx(void *threadid)
     int fd = tunnel->fd;
     int raw_socket = thr_tx_data->raw_socket;
     int payloadsz, ret;
-    unsigned char *ip = malloc(MAXPAYLOAD + 8); /* 8-byte header of GRE, rest is payload */
-    struct gre_hdr *ghdr = (struct gre_hdr*)ip;
-    unsigned char *payloadptr = ip + 8;
+    unsigned char *ip = malloc(MAXPAYLOAD + 2); /* 2-byte header of EtherIP */
+    struct eoip_hdr *ghdr = (struct eoip_hdr*)ip;
+    unsigned char *payloadptr = ip + 2;
     fd_set rfds;
 #ifndef __UCLIBC__
     int cpu = thr_tx_data->cpu;
@@ -277,7 +275,7 @@ static void *thr_tx(void *threadid)
 #endif
     memset(ip, 0x0, 20);
 
-    ghdr->header = __cpu_to_be32(0x20016400);
+    ghdr->header = 3 << 8;
     while(1) {
         FD_ZERO(&rfds);
         FD_SET(fd, &rfds);
@@ -286,8 +284,6 @@ static void *thr_tx(void *threadid)
 	payloadsz = read(fd, payloadptr, MAXPAYLOAD);
 	if (payloadsz < 0)
 	    continue;
-	ghdr->payload_size = __cpu_to_be16((uint16_t)payloadsz);
-	ghdr->tunnel_id = __cpu_to_le16((uint16_t)tunnel->id);
 	if (tunnel->dynamic)
 	    pthread_mutex_lock(&mutex1);
 	if(sendto(raw_socket, ip, payloadsz+8, 0, (struct sockaddr *)&tunnel->daddr, (socklen_t)sizeof(daddr)) < 0)
@@ -317,7 +313,7 @@ int main(int argc, char **argv)
     char *pidfile;
 
 
-    thr_rx_data.raw_socket = socket(PF_INET, SOCK_RAW, 47);
+    thr_rx_data.raw_socket = socket(PF_INET, SOCK_RAW, 97);
     if (thr_rx_data.raw_socket == -1) {
 
 	if (errno == EPERM) {
@@ -432,12 +428,6 @@ int main(int argc, char **argv)
     mfd = fopen(pidfile, "w");
     fprintf(mfd,"%d", getpid());
     fclose(mfd);
-
-    /* structure of Mikrotik EoIP:
-	... IP header ...
-	4 byte - GRE info
-	2 byte - tunnel id
-    */
 
     pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, LINUX_THREAD_STACK_SIZE);
