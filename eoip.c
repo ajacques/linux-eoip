@@ -275,7 +275,7 @@ static void *thr_tx(void *threadid)
 #endif
     memset(ip, 0x0, 20);
 
-    ghdr->header = 3 << 8;
+    ghdr->header = 3 << 16;
     while(1) {
         FD_ZERO(&rfds);
         FD_SET(fd, &rfds);
